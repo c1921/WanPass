@@ -17,6 +17,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,10 +42,17 @@ import io.github.c1921.wanpass.ui.isStrongBiometricAvailable
 import io.github.c1921.wanpass.ui.rememberAuthPromptController
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+
+enum class OnboardingEntryMode {
+    Initial,
+    RestoreReentry,
+}
 
 enum class OnboardingStep {
     Welcome,
@@ -63,6 +71,7 @@ data class OnboardingUiState(
     val webDavBaseUrl: String = "",
     val webDavRemoteRoot: String = "WanPass",
     val webDavUsername: String = "",
+    val webDavHasStoredPassword: Boolean = false,
     val webDavPassword: String = "",
     val recoveryCodeInput: String = "",
 )
@@ -76,6 +85,22 @@ class OnboardingViewModel @Inject constructor(
 ) : ViewModel() {
     private val mutableUiState = MutableStateFlow(OnboardingUiState())
     val uiState: StateFlow<OnboardingUiState> = mutableUiState.asStateFlow()
+    private val mutableCompletionEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val completionEvents = mutableCompletionEvents.asSharedFlow()
+
+    init {
+        viewModelScope.launch {
+            val stored = settingsRepository.loadWebDavSettings()
+            mutableUiState.update {
+                it.copy(
+                    webDavBaseUrl = stored.baseUrl,
+                    webDavRemoteRoot = stored.remoteRoot,
+                    webDavUsername = stored.username,
+                    webDavHasStoredPassword = stored.hasPassword,
+                )
+            }
+        }
+    }
 
     fun startSetup() {
         mutableUiState.update {
@@ -94,6 +119,17 @@ class OnboardingViewModel @Inject constructor(
                 step = OnboardingStep.WebDavRestore,
                 pendingSetupVault = null,
                 restoreMode = false,
+                saving = false,
+                error = null,
+            )
+        }
+    }
+
+    fun returnToWelcome() {
+        mutableUiState.update {
+            it.copy(
+                step = OnboardingStep.Welcome,
+                pendingSetupVault = null,
                 saving = false,
                 error = null,
             )
@@ -183,7 +219,8 @@ class OnboardingViewModel @Inject constructor(
                     pendingSetupVault.vaultKey.fill(0)
                 }
             }.onSuccess {
-                mutableUiState.value = OnboardingUiState()
+                mutableUiState.update { it.copy(saving = false, error = null, pendingSetupVault = null) }
+                mutableCompletionEvents.tryEmit(Unit)
             }.onFailure { error ->
                 mutableUiState.update { it.copy(saving = false, error = error.securityActionMessage("初始化失败")) }
             }
@@ -199,16 +236,24 @@ class OnboardingViewModel @Inject constructor(
         remoteRoot = mutableUiState.value.webDavRemoteRoot,
         username = mutableUiState.value.webDavUsername,
         password = mutableUiState.value.webDavPassword,
-        preserveStoredPassword = false,
+        preserveStoredPassword = mutableUiState.value.webDavPassword.isBlank() && mutableUiState.value.webDavHasStoredPassword,
     )
 }
 
 @Composable
 fun OnboardingRoute(
+    entryMode: OnboardingEntryMode = OnboardingEntryMode.Initial,
+    onExit: (() -> Unit)? = null,
+    onCompleted: (() -> Unit)? = null,
     viewModel: OnboardingViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val biometricAvailable = isStrongBiometricAvailable(LocalContext.current)
+    if (onCompleted != null) {
+        LaunchedEffect(viewModel, onCompleted) {
+            viewModel.completionEvents.collect { onCompleted() }
+        }
+    }
     val finishPromptController = rememberAuthPromptController(
         title = "完成初始化",
         subtitle = "写入本地解锁密钥前请先验证身份",
@@ -224,8 +269,10 @@ fun OnboardingRoute(
     SecureWindowEffect(enabled = true)
     when (uiState.step) {
         OnboardingStep.Welcome -> WelcomeStep(
+            entryMode = entryMode,
             onStart = viewModel::startSetup,
             onRestoreFromWebDav = viewModel::startWebDavRestore,
+            onExit = onExit,
         )
         OnboardingStep.RecoveryCode -> RecoveryCodeStep(
             recoveryCode = uiState.pendingSetupVault?.recoveryCode.orEmpty(),
@@ -241,7 +288,7 @@ fun OnboardingRoute(
             onRecoveryCodeChange = viewModel::updateRecoveryCodeInput,
             onTestConnection = viewModel::testWebDavConnection,
             onRestore = restorePromptController.authenticateDeviceCredential,
-            onBack = viewModel::startSetup,
+            onBack = viewModel::returnToWelcome,
         )
 
         OnboardingStep.Biometric -> BiometricStep(
@@ -266,8 +313,10 @@ fun OnboardingRoute(
 
 @Composable
 private fun WelcomeStep(
+    entryMode: OnboardingEntryMode,
     onStart: () -> Unit,
     onRestoreFromWebDav: () -> Unit,
+    onExit: (() -> Unit)?,
 ) {
     Column(
         modifier = Modifier
@@ -277,26 +326,51 @@ private fun WelcomeStep(
     ) {
         Text(text = "WanPass", style = MaterialTheme.typography.displaySmall)
         Text(
-            text = "只做储存、查看、搜索和安全。所有核心功能默认离线可用。",
+            text = if (entryMode == OnboardingEntryMode.Initial) {
+                "只做储存、查看、搜索和安全。所有核心功能默认离线可用。"
+            } else {
+                "当前仓库还是空的。你可以重新进入恢复引导，把 WebDAV 备份恢复到这台设备。"
+            },
             modifier = Modifier.padding(top = 12.dp),
             style = MaterialTheme.typography.bodyLarge,
         )
         Text(
-            text = "首次创建后会生成恢复码，请抄写到离线介质并单独保管，不要截图留在相册或云端。",
+            text = if (entryMode == OnboardingEntryMode.Initial) {
+                "首次创建后会生成恢复码，请抄写到离线介质并单独保管，不要截图留在相册或云端。"
+            } else {
+                "恢复时需要 WebDAV 地址、账号密码和恢复码。这个流程不会出现在日常设置里。"
+            },
             modifier = Modifier.padding(top = 8.dp),
             style = MaterialTheme.typography.bodyMedium,
         )
-        Button(
-            onClick = onStart,
-            modifier = Modifier.padding(top = 24.dp),
-        ) {
-            Text("开始创建本地保险箱")
-        }
-        OutlinedButton(
-            onClick = onRestoreFromWebDav,
-            modifier = Modifier.padding(top = 12.dp),
-        ) {
-            Text("从 WebDAV 备份恢复")
+        if (entryMode == OnboardingEntryMode.Initial) {
+            Button(
+                onClick = onStart,
+                modifier = Modifier.padding(top = 24.dp),
+            ) {
+                Text("开始创建本地保险箱")
+            }
+            OutlinedButton(
+                onClick = onRestoreFromWebDav,
+                modifier = Modifier.padding(top = 12.dp),
+            ) {
+                Text("从 WebDAV 备份恢复")
+            }
+        } else {
+            Button(
+                onClick = onRestoreFromWebDav,
+                modifier = Modifier.padding(top = 24.dp),
+            ) {
+                Text("从 WebDAV 备份恢复")
+            }
+            if (onExit != null) {
+                OutlinedButton(
+                    onClick = onExit,
+                    modifier = Modifier.padding(top = 12.dp),
+                ) {
+                    Text("返回首页")
+                }
+            }
         }
     }
 }
@@ -391,7 +465,15 @@ private fun WebDavRestoreStep(
             value = uiState.webDavPassword,
             onValueChange = onPasswordChange,
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("密码") },
+            label = {
+                Text(
+                    if (uiState.webDavHasStoredPassword) {
+                        "密码（留空则保持已保存）"
+                    } else {
+                        "密码"
+                    }
+                )
+            },
             singleLine = true,
             enabled = !uiState.saving,
             visualTransformation = PasswordVisualTransformation(),
@@ -435,7 +517,7 @@ private fun WebDavRestoreStep(
             enabled = !uiState.saving,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("返回并新建本地保险箱")
+            Text("返回欢迎页")
         }
     }
 }

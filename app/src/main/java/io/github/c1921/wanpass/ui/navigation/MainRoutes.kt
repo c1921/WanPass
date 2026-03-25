@@ -10,6 +10,7 @@ object MainRoutes {
     const val Detail = "detail/{itemId}"
     const val Settings = "settings"
     const val RecoveryCode = "recovery_code"
+    const val RestoreOnboarding = "restore_onboarding"
 
     fun newItem(type: VaultItemType): String = "new/${type.storageValue}"
     fun editItem(itemId: String): String = "edit/$itemId"

@@ -31,10 +31,23 @@ import kotlinx.coroutines.sync.withLock
 
 sealed interface WebDavEnableResult {
     data object Enabled : WebDavEnableResult
-    data class RequiresRemoteDecision(
-        val remoteInfo: RemoteBackupInfo,
-        val localHasData: Boolean,
-    ) : WebDavEnableResult
+    data class RequiresRemoteOverwriteDecision(val remoteInfo: RemoteBackupInfo) : WebDavEnableResult
+    data class RequiresRestoreOnboarding(val remoteInfo: RemoteBackupInfo) : WebDavEnableResult
+}
+
+internal enum class WebDavEnablePath {
+    ENABLE_DIRECTLY,
+    RESTORE_ONBOARDING,
+    OVERWRITE_REMOTE,
+}
+
+internal fun classifyWebDavEnablePath(
+    remoteHasBackup: Boolean,
+    localItemCount: Int,
+): WebDavEnablePath = when {
+    !remoteHasBackup -> WebDavEnablePath.ENABLE_DIRECTLY
+    localItemCount == 0 -> WebDavEnablePath.RESTORE_ONBOARDING
+    else -> WebDavEnablePath.OVERWRITE_REMOTE
 }
 
 @Singleton
@@ -74,22 +87,22 @@ class WebDavSyncGateway @Inject constructor(
 
         val remoteInfo = backupService.inspectRemote(config)
         val localCount = vaultItemDao.countActiveItems()
-        return when {
-            !remoteInfo.hasBackup -> {
+        return when (classifyWebDavEnablePath(remoteInfo.hasBackup, localCount)) {
+            WebDavEnablePath.ENABLE_DIRECTLY -> {
                 uploadLocalOverwriteRemoteInternal(config)
                 WebDavEnableResult.Enabled
             }
 
-            localCount == 0 -> {
+            WebDavEnablePath.RESTORE_ONBOARDING -> {
                 mutableSyncState.value = SyncState.CONFLICT
-                mutableStatusText.value = "远端已有备份，请使用恢复码恢复到本机"
-                WebDavEnableResult.RequiresRemoteDecision(remoteInfo = remoteInfo, localHasData = false)
+                mutableStatusText.value = "远端已有备份，请返回首页进入恢复引导"
+                WebDavEnableResult.RequiresRestoreOnboarding(remoteInfo)
             }
 
-            else -> {
+            WebDavEnablePath.OVERWRITE_REMOTE -> {
                 mutableSyncState.value = SyncState.CONFLICT
-                mutableStatusText.value = "远端已有备份，请选择上传本地或从远端恢复"
-                WebDavEnableResult.RequiresRemoteDecision(remoteInfo = remoteInfo, localHasData = true)
+                mutableStatusText.value = "远端已有备份，请选择上传本地覆盖远端"
+                WebDavEnableResult.RequiresRemoteOverwriteDecision(remoteInfo)
             }
         }
     }

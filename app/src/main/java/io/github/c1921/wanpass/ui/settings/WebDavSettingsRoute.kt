@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
@@ -26,7 +25,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -61,19 +59,13 @@ private data class WebDavEditorState(
     val remoteRoot: String = "WanPass",
     val username: String = "",
     val password: String = "",
-    val recoveryCode: String = "",
-)
-
-private data class PendingRemoteDecision(
-    val remoteInfo: RemoteBackupInfo,
-    val localHasData: Boolean,
 )
 
 private data class SettingsActionState(
     val busy: Boolean = false,
     val feedbackMessage: String? = null,
     val feedbackIsError: Boolean = false,
-    val pendingRemoteDecision: PendingRemoteDecision? = null,
+    val pendingRemoteDecision: RemoteBackupInfo? = null,
     val editorDirty: Boolean = false,
 )
 
@@ -89,12 +81,10 @@ data class WebDavSettingsUiState(
     val webDavRemoteRoot: String = "WanPass",
     val webDavUsername: String = "",
     val webDavPasswordInput: String = "",
-    val webDavRecoveryCodeInput: String = "",
     val busy: Boolean = false,
     val feedbackMessage: String? = null,
     val feedbackIsError: Boolean = false,
     val pendingRemoteDecision: RemoteBackupInfo? = null,
-    val pendingDecisionHasLocalData: Boolean = false,
 )
 
 @HiltViewModel
@@ -141,12 +131,10 @@ class WebDavSettingsViewModel @Inject constructor(
             webDavRemoteRoot = editor.remoteRoot,
             webDavUsername = editor.username,
             webDavPasswordInput = editor.password,
-            webDavRecoveryCodeInput = editor.recoveryCode,
             busy = action.busy,
             feedbackMessage = action.feedbackMessage,
             feedbackIsError = action.feedbackIsError,
-            pendingRemoteDecision = action.pendingRemoteDecision?.remoteInfo,
-            pendingDecisionHasLocalData = action.pendingRemoteDecision?.localHasData == true,
+            pendingRemoteDecision = action.pendingRemoteDecision,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -189,8 +177,6 @@ class WebDavSettingsViewModel @Inject constructor(
 
     fun updateWebDavPassword(value: String) = updateEditor { it.copy(password = value) }
 
-    fun updateRecoveryCode(value: String) = updateEditor { it.copy(recoveryCode = value) }
-
     fun testWebDavConnection() {
         runAction("WebDAV 连接测试通过", "连接测试失败") {
             webDavSyncGateway.testConnection(currentDraft())
@@ -221,20 +207,25 @@ class WebDavSettingsViewModel @Inject constructor(
                         }
                     }
 
-                    is WebDavEnableResult.RequiresRemoteDecision -> {
+                    is WebDavEnableResult.RequiresRemoteOverwriteDecision -> {
                         actionState.update {
                             it.copy(
                                 busy = false,
-                                feedbackMessage = if (result.localHasData) {
-                                    "远端已有备份，请选择上传本地或从远端恢复"
-                                } else {
-                                    "远端已有备份，请输入恢复码恢复到本机"
-                                },
+                                feedbackMessage = "远端已有备份，请选择上传本地覆盖远端。",
                                 feedbackIsError = false,
-                                pendingRemoteDecision = PendingRemoteDecision(
-                                    remoteInfo = result.remoteInfo,
-                                    localHasData = result.localHasData,
-                                ),
+                                pendingRemoteDecision = result.remoteInfo,
+                                editorDirty = false,
+                            )
+                        }
+                    }
+
+                    is WebDavEnableResult.RequiresRestoreOnboarding -> {
+                        actionState.update {
+                            it.copy(
+                                busy = false,
+                                feedbackMessage = "远端已有备份。当前仓库为空，请返回首页并使用“从 WebDAV 备份恢复”。",
+                                feedbackIsError = false,
+                                pendingRemoteDecision = null,
                                 editorDirty = false,
                             )
                         }
@@ -267,47 +258,6 @@ class WebDavSettingsViewModel @Inject constructor(
     fun takeOverRemote() {
         runAction("当前设备已接管远端备份", "接管失败") {
             webDavSyncGateway.takeOverRemote()
-        }
-    }
-
-    fun restoreFromRemote() {
-        viewModelScope.launch {
-            val recoveryCode = editorState.value.recoveryCode.trim()
-            if (recoveryCode.isBlank()) {
-                actionState.update {
-                    it.copy(
-                        feedbackMessage = "请输入恢复码后再执行远端恢复",
-                        feedbackIsError = true,
-                    )
-                }
-                return@launch
-            }
-            actionState.update { it.copy(busy = true, feedbackMessage = null, feedbackIsError = false) }
-            runCatching {
-                webDavSyncGateway.restoreFromRemote(
-                    recoveryCode = recoveryCode,
-                    draft = currentDraft(),
-                )
-            }.onSuccess {
-                editorState.update { it.copy(password = "", recoveryCode = "") }
-                actionState.update {
-                    it.copy(
-                        busy = false,
-                        feedbackMessage = "已从 WebDAV 恢复到本机",
-                        feedbackIsError = false,
-                        pendingRemoteDecision = null,
-                        editorDirty = false,
-                    )
-                }
-            }.onFailure { error ->
-                actionState.update {
-                    it.copy(
-                        busy = false,
-                        feedbackMessage = error.securityActionMessage("远端恢复失败"),
-                        feedbackIsError = true,
-                    )
-                }
-            }
         }
     }
 
@@ -385,12 +335,6 @@ fun WebDavSettingsRoute(
         onSuccess = { viewModel.setWebDavEnabled(true) },
         onFailure = viewModel::showPromptError,
     )
-    val restorePromptController = rememberAuthPromptController(
-        title = "恢复 WebDAV 备份",
-        subtitle = "导入远端备份前请先验证身份",
-        onSuccess = viewModel::restoreFromRemote,
-        onFailure = viewModel::showPromptError,
-    )
     WebDavSettingsScreen(
         uiState = uiState,
         biometricAvailable = biometricAvailable,
@@ -408,12 +352,10 @@ fun WebDavSettingsRoute(
         onWebDavRemoteRootChange = viewModel::updateWebDavRemoteRoot,
         onWebDavUsernameChange = viewModel::updateWebDavUsername,
         onWebDavPasswordChange = viewModel::updateWebDavPassword,
-        onRecoveryCodeChange = viewModel::updateRecoveryCode,
         onTestConnection = viewModel::testWebDavConnection,
         onSyncNow = viewModel::syncNow,
         onUploadLocalOverwriteRemote = viewModel::uploadLocalOverwriteRemote,
         onTakeOverRemote = viewModel::takeOverRemote,
-        onRestoreFromRemote = restorePromptController.authenticateDeviceCredential,
         onShowRecoveryCode = recoveryCodePromptController.authenticateDeviceCredential,
     )
 }
@@ -431,12 +373,10 @@ private fun WebDavSettingsScreen(
     onWebDavRemoteRootChange: (String) -> Unit,
     onWebDavUsernameChange: (String) -> Unit,
     onWebDavPasswordChange: (String) -> Unit,
-    onRecoveryCodeChange: (String) -> Unit,
     onTestConnection: () -> Unit,
     onSyncNow: () -> Unit,
     onUploadLocalOverwriteRemote: () -> Unit,
     onTakeOverRemote: () -> Unit,
-    onRestoreFromRemote: () -> Unit,
     onShowRecoveryCode: () -> Unit,
 ) {
     Scaffold(
@@ -509,6 +449,10 @@ private fun WebDavSettingsScreen(
                 ) {
                     Text(text = "WebDAV 备份", style = MaterialTheme.typography.titleMedium)
                     Text(text = uiState.syncStatusText)
+                    Text(
+                        text = "远端恢复只在首次引导或空仓库时可用，避免误覆盖当前设备上的记录。",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
                     if (uiState.webDavLastSyncAt != null) {
                         Text(text = "最近同步：${formatTimestamp(uiState.webDavLastSyncAt)}")
                     }
@@ -564,16 +508,6 @@ private fun WebDavSettingsScreen(
                         enabled = !uiState.busy,
                         visualTransformation = PasswordVisualTransformation(),
                     )
-                    OutlinedTextField(
-                        value = uiState.webDavRecoveryCodeInput,
-                        onValueChange = onRecoveryCodeChange,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("恢复码（用于从远端恢复）") },
-                        singleLine = true,
-                        enabled = !uiState.busy,
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    )
                     OutlinedButton(
                         onClick = onTestConnection,
                         modifier = Modifier.fillMaxWidth(),
@@ -596,21 +530,12 @@ private fun WebDavSettingsScreen(
                                 uiState.pendingRemoteDecision.lastBackupAt?.let(::formatTimestamp) ?: "未知"
                             }",
                         )
-                        if (uiState.pendingDecisionHasLocalData) {
-                            OutlinedButton(
-                                onClick = onUploadLocalOverwriteRemote,
-                                modifier = Modifier.fillMaxWidth(),
-                                enabled = !uiState.busy,
-                            ) {
-                                Text("上传本地覆盖远端")
-                            }
-                        }
                         OutlinedButton(
-                            onClick = onRestoreFromRemote,
+                            onClick = onUploadLocalOverwriteRemote,
                             modifier = Modifier.fillMaxWidth(),
-                            enabled = !uiState.busy && uiState.webDavRecoveryCodeInput.isNotBlank(),
+                            enabled = !uiState.busy,
                         ) {
-                            Text("从远端恢复到本机")
+                            Text("上传本地覆盖远端")
                         }
                     }
                     if (uiState.webDavEnabled) {
