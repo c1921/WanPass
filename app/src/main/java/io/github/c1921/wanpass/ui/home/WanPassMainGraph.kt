@@ -68,6 +68,8 @@ data class HomeUiState(
     val visibleItems: List<VaultItemSummary> = emptyList(),
 )
 
+internal fun homeListItemKey(section: String, itemId: String): String = "$section:$itemId"
+
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     vaultRepository: VaultRepository,
@@ -241,7 +243,7 @@ private fun HomeScreen(
                 item {
                     Text(text = "最近查看", style = MaterialTheme.typography.titleMedium)
                 }
-                items(uiState.recentItems, key = { it.id }) { item ->
+                items(uiState.recentItems, key = { homeListItemKey("recent", it.id) }) { item ->
                     VaultSummaryCard(item = item, onClick = { onOpenItem(item.id) })
                 }
             }
@@ -261,7 +263,7 @@ private fun HomeScreen(
                     }
                 }
             } else {
-                items(uiState.visibleItems, key = { it.id }) { item ->
+                items(uiState.visibleItems, key = { homeListItemKey("all", it.id) }) { item ->
                     VaultSummaryCard(item = item, onClick = { onOpenItem(item.id) })
                 }
             }
