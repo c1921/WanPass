@@ -11,6 +11,7 @@ data class VaultItemEntity(
     @ColumnInfo(name = "title_ciphertext") val titleCiphertext: ByteArray,
     @ColumnInfo(name = "content_ciphertext") val contentCiphertext: ByteArray,
     @ColumnInfo(name = "search_blob_ciphertext") val searchBlobCiphertext: ByteArray,
+    @ColumnInfo(name = "sort_order") val sortOrder: Long,
     @ColumnInfo(name = "created_at") val createdAt: Long,
     @ColumnInfo(name = "updated_at") val updatedAt: Long,
     @ColumnInfo(name = "deleted_at") val deletedAt: Long?,

@@ -6,6 +6,7 @@ import io.github.c1921.wanpass.domain.model.NoteContent
 import io.github.c1921.wanpass.domain.model.SyncState
 import io.github.c1921.wanpass.domain.model.VaultItem
 import io.github.c1921.wanpass.domain.model.VaultItemSummary
+import io.github.c1921.wanpass.domain.model.VaultItemType
 import io.github.c1921.wanpass.domain.model.WebDavConfigDraft
 import io.github.c1921.wanpass.domain.model.WebDavRuntimeConfig
 import io.github.c1921.wanpass.domain.model.WebDavSettings
@@ -20,6 +21,12 @@ interface VaultRepository {
     suspend fun createNote(content: NoteContent): String
     suspend fun updateLogin(itemId: String, content: LoginContent): String
     suspend fun updateNote(itemId: String, content: NoteContent): String
+    suspend fun reorderItem(
+        type: VaultItemType,
+        itemId: String,
+        previousItemId: String?,
+        nextItemId: String?,
+    )
     suspend fun delete(itemId: String)
 }
 

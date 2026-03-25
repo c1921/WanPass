@@ -91,6 +91,7 @@ data class VaultItemSummary(
     val id: String,
     val title: String,
     val type: VaultItemType,
+    val sortOrder: Long,
     val createdAt: Long,
     val updatedAt: Long,
 )

@@ -46,6 +46,7 @@ class VaultRepositoryImpl @Inject constructor(
                         id = entity.id,
                         title = cryptoEngine.decryptString(vaultKey, entity.titleCiphertext),
                         type = VaultItemType.fromStorage(entity.type),
+                        sortOrder = entity.sortOrder,
                         createdAt = entity.createdAt,
                         updatedAt = entity.updatedAt,
                     )
@@ -86,6 +87,79 @@ class VaultRepositoryImpl @Inject constructor(
         return itemId
     }
 
+    override suspend fun reorderItem(
+        type: VaultItemType,
+        itemId: String,
+        previousItemId: String?,
+        nextItemId: String?,
+    ) {
+        val existing = vaultItemDao.getItemById(itemId) ?: error("Record not found")
+        if (existing.deletedAt != null) error("Record not found")
+        if (existing.type != type.storageValue) error("Record type mismatch")
+
+        val orderedItems = vaultItemDao.getActiveItemsSnapshot()
+            .filter { it.type == type.storageValue }
+            .sortedWith(compareByDescending<VaultItemEntity> { it.sortOrder }
+                .thenByDescending { it.updatedAt }
+                .thenByDescending { it.id })
+        val currentIndex = orderedItems.indexOfFirst { it.id == itemId }
+        if (currentIndex == -1) error("Record not found")
+
+        val reorderedItems = orderedItems.toMutableList().apply {
+            val moved = removeAt(currentIndex)
+            val targetIndex = resolveReorderIndex(
+                items = this,
+                previousItemId = previousItemId,
+                nextItemId = nextItemId,
+            )
+            add(targetIndex, moved)
+        }
+        val newIndex = reorderedItems.indexOfFirst { it.id == itemId }
+        if (newIndex == currentIndex) return
+
+        val previous = reorderedItems.getOrNull(newIndex - 1)
+        val next = reorderedItems.getOrNull(newIndex + 1)
+        val now = timeProvider.now()
+        val webDavEnabled = settingsRepository.loadWebDavSettings().enabled
+        val updatedEntities = buildList {
+            val reorderedSortOrder = calculateReorderedSortOrder(
+                previousSortOrder = previous?.sortOrder,
+                nextSortOrder = next?.sortOrder,
+            )
+            if (reorderedSortOrder != null) {
+                add(
+                    existing.copy(
+                        sortOrder = reorderedSortOrder,
+                        updatedAt = now,
+                        revision = existing.revision + 1,
+                        syncState = nextUpsertSyncState(existing = existing, webDavEnabled = webDavEnabled),
+                    )
+                )
+            } else {
+                val sortOrders = normalizedSortOrders(reorderedItems.map(VaultItemEntity::id))
+                reorderedItems.forEach { entity ->
+                    val normalizedSortOrder = sortOrders.getValue(entity.id)
+                    if (entity.sortOrder != normalizedSortOrder) {
+                        add(
+                            entity.copy(
+                                sortOrder = normalizedSortOrder,
+                                updatedAt = now,
+                                revision = entity.revision + 1,
+                                syncState = nextUpsertSyncState(existing = entity, webDavEnabled = webDavEnabled),
+                            )
+                        )
+                    }
+                }
+            }
+        }
+        if (updatedEntities.isEmpty()) return
+
+        vaultItemDao.upsertAll(updatedEntities)
+        if (webDavEnabled) {
+            webDavSyncGateway.requestSync()
+        }
+    }
+
     override suspend fun delete(itemId: String) {
         val existing = vaultItemDao.getItemById(itemId) ?: return
         val now = timeProvider.now()
@@ -122,14 +196,15 @@ class VaultRepositoryImpl @Inject constructor(
                     json.encodeToString(LoginContent.serializer(), content)
                 ),
                 searchBlobCiphertext = cryptoEngine.encryptString(vaultKey, searchBlob),
+                sortOrder = existing?.sortOrder
+                    ?: nextCreatedSortOrder(
+                        vaultItemDao.getMaxSortOrder(VaultItemType.LOGIN.storageValue)
+                    ),
                 createdAt = existing?.createdAt ?: now,
                 updatedAt = now,
                 deletedAt = null,
                 revision = (existing?.revision ?: 0L) + 1,
-                syncState = WebDavSyncPolicies.upsertState(
-                    webDavEnabled = webDavEnabled,
-                    isExistingItem = existing != null,
-                ).storageValue,
+                syncState = nextUpsertSyncState(existing = existing, webDavEnabled = webDavEnabled),
             )
         )
         updateSearchIndex(itemId, searchBlob)
@@ -155,20 +230,55 @@ class VaultRepositoryImpl @Inject constructor(
                     json.encodeToString(NoteContent.serializer(), content)
                 ),
                 searchBlobCiphertext = cryptoEngine.encryptString(vaultKey, searchBlob),
+                sortOrder = existing?.sortOrder
+                    ?: nextCreatedSortOrder(
+                        vaultItemDao.getMaxSortOrder(VaultItemType.NOTE.storageValue)
+                    ),
                 createdAt = existing?.createdAt ?: now,
                 updatedAt = now,
                 deletedAt = null,
                 revision = (existing?.revision ?: 0L) + 1,
-                syncState = WebDavSyncPolicies.upsertState(
-                    webDavEnabled = webDavEnabled,
-                    isExistingItem = existing != null,
-                ).storageValue,
+                syncState = nextUpsertSyncState(existing = existing, webDavEnabled = webDavEnabled),
             )
         )
         updateSearchIndex(itemId, searchBlob)
         if (webDavEnabled) {
             webDavSyncGateway.requestSync()
         }
+    }
+
+    private fun nextUpsertSyncState(existing: VaultItemEntity?, webDavEnabled: Boolean): String {
+        if (!webDavEnabled) return SyncState.DISABLED.storageValue
+        if (existing == null) {
+            return WebDavSyncPolicies.upsertState(
+                webDavEnabled = true,
+                isExistingItem = false,
+            ).storageValue
+        }
+        if (existing.syncState == SyncState.PENDING_CREATE.storageValue) {
+            return SyncState.PENDING_CREATE.storageValue
+        }
+        return SyncState.PENDING_UPDATE.storageValue
+    }
+
+    private fun resolveReorderIndex(
+        items: List<VaultItemEntity>,
+        previousItemId: String?,
+        nextItemId: String?,
+    ): Int = when {
+        previousItemId != null -> {
+            val previousIndex = items.indexOfFirst { it.id == previousItemId }
+            if (previousIndex == -1) error("Invalid reorder target")
+            previousIndex + 1
+        }
+
+        nextItemId != null -> {
+            val nextIndex = items.indexOfFirst { it.id == nextItemId }
+            if (nextIndex == -1) error("Invalid reorder target")
+            nextIndex
+        }
+
+        else -> items.size
     }
 
     private fun updateSearchIndex(itemId: String, searchBlob: String) {

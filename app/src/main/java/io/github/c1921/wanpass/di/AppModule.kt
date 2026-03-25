@@ -14,6 +14,7 @@ import dagger.hilt.components.SingletonComponent
 import io.github.c1921.wanpass.core.SystemTimeProvider
 import io.github.c1921.wanpass.core.TimeProvider
 import io.github.c1921.wanpass.data.local.VaultDatabase
+import io.github.c1921.wanpass.data.local.VaultMigrations
 import io.github.c1921.wanpass.data.repository.WebDavSyncGateway
 import io.github.c1921.wanpass.data.repository.VaultRepositoryImpl
 import io.github.c1921.wanpass.data.repository.VaultSettingsRepositoryImpl
@@ -69,7 +70,9 @@ object AppModule {
     @Provides
     @Singleton
     fun provideVaultDatabase(@ApplicationContext context: Context): VaultDatabase =
-        Room.databaseBuilder(context, VaultDatabase::class.java, "wanpass.db").build()
+        Room.databaseBuilder(context, VaultDatabase::class.java, "wanpass.db")
+            .addMigrations(VaultMigrations.Migration1To2)
+            .build()
 
     @Provides
     fun provideVaultItemDao(database: VaultDatabase) = database.vaultItemDao()

@@ -23,7 +23,7 @@ data class WebDavManifest(
     )
 
     companion object {
-        const val SchemaVersion = 1
+        const val SchemaVersion = 2
     }
 }
 
@@ -47,6 +47,7 @@ data class WebDavItemFile(
     val titleCiphertextBase64: String,
     val contentCiphertextBase64: String,
     val searchBlobCiphertextBase64: String,
+    val sortOrder: Long? = null,
     val createdAt: Long,
     val updatedAt: Long,
     val deletedAt: Long?,
@@ -86,6 +87,7 @@ internal fun VaultItemEntity.toWebDavItemFile(): WebDavItemFile = WebDavItemFile
     titleCiphertextBase64 = Base64Codec.encode(titleCiphertext),
     contentCiphertextBase64 = Base64Codec.encode(contentCiphertext),
     searchBlobCiphertextBase64 = Base64Codec.encode(searchBlobCiphertext),
+    sortOrder = sortOrder,
     createdAt = createdAt,
     updatedAt = updatedAt,
     deletedAt = deletedAt,
@@ -98,6 +100,7 @@ internal fun WebDavItemFile.toEntity(): VaultItemEntity = VaultItemEntity(
     titleCiphertext = Base64Codec.decode(titleCiphertextBase64),
     contentCiphertext = Base64Codec.decode(contentCiphertextBase64),
     searchBlobCiphertext = Base64Codec.decode(searchBlobCiphertextBase64),
+    sortOrder = sortOrder ?: updatedAt,
     createdAt = createdAt,
     updatedAt = updatedAt,
     deletedAt = deletedAt,
