@@ -34,6 +34,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+private enum class PromptedUnlockAction {
+    UNLOCK,
+    RECOVER,
+}
+
 data class UnlockUiState(
     val message: String? = null,
     val recoveryMode: Boolean = false,
@@ -47,8 +52,34 @@ class UnlockViewModel @Inject constructor(
 ) : ViewModel() {
     private val mutableUiState = MutableStateFlow(UnlockUiState())
     val uiState: StateFlow<UnlockUiState> = mutableUiState.asStateFlow()
+    private var pendingPromptedAction: PromptedUnlockAction? = null
 
-    fun unlock() {
+    fun prepareUnlockPrompt() {
+        pendingPromptedAction = PromptedUnlockAction.UNLOCK
+        mutableUiState.update { it.copy(message = null) }
+    }
+
+    fun prepareRecoveryPrompt(): Boolean {
+        val recoveryCode = mutableUiState.value.recoveryCodeInput.trim()
+        if (recoveryCode.isBlank()) {
+            mutableUiState.update { it.copy(message = "请输入恢复码后再继续") }
+            return false
+        }
+        pendingPromptedAction = PromptedUnlockAction.RECOVER
+        mutableUiState.update { it.copy(message = null) }
+        return true
+    }
+
+    fun performPromptedAction() {
+        when (pendingPromptedAction) {
+            PromptedUnlockAction.UNLOCK -> unlock()
+            PromptedUnlockAction.RECOVER -> submitRecoveryCode()
+            null -> Unit
+        }
+        pendingPromptedAction = null
+    }
+
+    private fun unlock() {
         viewModelScope.launch {
             mutableUiState.update { it.copy(submitting = true, message = null) }
             when (val result = sessionManager.unlock()) {
@@ -72,7 +103,7 @@ class UnlockViewModel @Inject constructor(
         mutableUiState.update { it.copy(recoveryCodeInput = value) }
     }
 
-    fun submitRecoveryCode() {
+    private fun submitRecoveryCode() {
         viewModelScope.launch {
             mutableUiState.update { it.copy(submitting = true, message = null) }
             when (val result = sessionManager.recoverAndUnlock(mutableUiState.value.recoveryCodeInput)) {
@@ -89,6 +120,7 @@ class UnlockViewModel @Inject constructor(
     }
 
     fun showPromptError(message: String) {
+        pendingPromptedAction = null
         mutableUiState.update { it.copy(message = message, submitting = false) }
     }
 }
@@ -101,8 +133,11 @@ fun UnlockRoute(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val biometricAvailable = biometricEnabled && isStrongBiometricAvailable(context)
-    val authPromptController = rememberUnlockPromptController(viewModel::unlock, viewModel::showPromptError)
-    SecureWindowEffect(enabled = false)
+    val authPromptController = rememberUnlockPromptController(
+        onPromptSuccess = viewModel::performPromptedAction,
+        onPromptError = viewModel::showPromptError,
+    )
+    SecureWindowEffect(enabled = true)
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -118,7 +153,10 @@ fun UnlockRoute(
         if (!uiState.recoveryMode) {
             if (biometricAvailable) {
                 Button(
-                    onClick = authPromptController.authenticateBiometric,
+                    onClick = {
+                        viewModel.prepareUnlockPrompt()
+                        authPromptController.authenticateBiometric()
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 24.dp),
@@ -128,7 +166,10 @@ fun UnlockRoute(
                 }
             }
             OutlinedButton(
-                onClick = authPromptController.authenticateDeviceCredential,
+                onClick = {
+                    viewModel.prepareUnlockPrompt()
+                    authPromptController.authenticateDeviceCredential()
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 12.dp),
@@ -156,7 +197,11 @@ fun UnlockRoute(
                 visualTransformation = PasswordVisualTransformation(),
             )
             Button(
-                onClick = viewModel::submitRecoveryCode,
+                onClick = {
+                    if (viewModel.prepareRecoveryPrompt()) {
+                        authPromptController.authenticateDeviceCredential()
+                    }
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 12.dp),
@@ -186,11 +231,11 @@ fun UnlockRoute(
 
 @Composable
 private fun rememberUnlockPromptController(
-    onUnlockSuccess: () -> Unit,
+    onPromptSuccess: () -> Unit,
     onPromptError: (String) -> Unit,
 ): AuthPromptController = rememberAuthPromptController(
     title = "解锁 WanPass",
     subtitle = "验证通过后载入本地保险箱",
-    onSuccess = onUnlockSuccess,
+    onSuccess = onPromptSuccess,
     onFailure = onPromptError,
 )

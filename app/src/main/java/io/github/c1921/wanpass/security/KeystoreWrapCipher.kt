@@ -47,6 +47,8 @@ class KeystoreWrapCipher @Inject constructor() {
             .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
             .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
             .setKeySize(256)
+            .setUserAuthenticationRequired(true)
+            .setUserAuthenticationParameters(KeystoreAuthTimeoutSeconds, KeystoreAuthTypes)
             .build()
         generator.init(spec)
         return generator.generateKey()

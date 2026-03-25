@@ -1,6 +1,9 @@
 package io.github.c1921.wanpass.security
 
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
 import io.github.c1921.wanpass.core.Base64Codec
+import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -27,18 +30,19 @@ class WebDavCredentialCipher @Inject constructor() {
     }
 
     private fun getOrCreateKey(): SecretKey {
-        val keyStore = java.security.KeyStore.getInstance(Provider).apply { load(null) }
+        val keyStore = KeyStore.getInstance(Provider).apply { load(null) }
         val existing = keyStore.getKey(Alias, null) as? SecretKey
         if (existing != null) return existing
-        val generator = KeyGenerator.getInstance(android.security.keystore.KeyProperties.KEY_ALGORITHM_AES, Provider)
-        val spec = android.security.keystore.KeyGenParameterSpec.Builder(
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, Provider)
+        val spec = KeyGenParameterSpec.Builder(
             Alias,
-            android.security.keystore.KeyProperties.PURPOSE_ENCRYPT or
-                android.security.keystore.KeyProperties.PURPOSE_DECRYPT,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
         )
-            .setBlockModes(android.security.keystore.KeyProperties.BLOCK_MODE_GCM)
-            .setEncryptionPaddings(android.security.keystore.KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
             .setKeySize(256)
+            .setUserAuthenticationRequired(true)
+            .setUserAuthenticationParameters(KeystoreAuthTimeoutSeconds, KeystoreAuthTypes)
             .build()
         generator.init(spec)
         return generator.generateKey()

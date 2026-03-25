@@ -9,6 +9,7 @@ import io.github.c1921.wanpass.domain.model.WebDavRuntimeConfig
 import io.github.c1921.wanpass.domain.model.WebDavSettings
 import io.github.c1921.wanpass.domain.repository.VaultSettingsRepository
 import io.github.c1921.wanpass.security.WebDavCredentialCipher
+import io.github.c1921.wanpass.security.WebDavCredentialSessionCache
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
@@ -17,6 +18,7 @@ import kotlinx.coroutines.flow.Flow
 class VaultSettingsRepositoryImpl @Inject constructor(
     private val preferencesStore: VaultPreferencesStore,
     private val webDavCredentialCipher: WebDavCredentialCipher,
+    private val webDavCredentialSessionCache: WebDavCredentialSessionCache,
 ) : VaultSettingsRepository {
     override val settingsFlow: Flow<VaultSettings> = preferencesStore.settingsFlow
     override val recentViewedIdsFlow: Flow<List<String>> = preferencesStore.recentViewedIdsFlow
@@ -52,8 +54,13 @@ class VaultSettingsRepositoryImpl @Inject constructor(
 
     override suspend fun saveWebDavConfig(draft: WebDavConfigDraft) {
         val passwordCiphertext = when {
-            draft.password.isNotBlank() -> webDavCredentialCipher.encrypt(draft.password)
+            draft.password.isNotBlank() -> webDavCredentialCipher.encrypt(draft.password).also {
+                webDavCredentialSessionCache.store(draft.password)
+            }
             else -> null
+        }
+        if (passwordCiphertext == null && !draft.preserveStoredPassword) {
+            webDavCredentialSessionCache.clear()
         }
         preferencesStore.saveWebDavConfig(
             baseUrl = draft.baseUrl,
@@ -65,22 +72,29 @@ class VaultSettingsRepositoryImpl @Inject constructor(
     }
 
     override suspend fun setWebDavEnabled(value: Boolean) {
+        if (!value) {
+            webDavCredentialSessionCache.clear()
+        }
         preferencesStore.setWebDavEnabled(value)
     }
 
     override suspend fun clearWebDavConfig() {
+        webDavCredentialSessionCache.clear()
         preferencesStore.clearWebDavConfig()
     }
 
     override suspend fun loadWebDavRuntimeConfig(): WebDavRuntimeConfig? {
         val settings = preferencesStore.loadWebDavSettings()
         if (settings.baseUrl.isBlank() || settings.username.isBlank()) return null
-        val passwordCiphertext = preferencesStore.loadWebDavPasswordCiphertext() ?: return null
+        val password = webDavCredentialSessionCache.load() ?: run {
+            val passwordCiphertext = preferencesStore.loadWebDavPasswordCiphertext() ?: return null
+            webDavCredentialCipher.decrypt(passwordCiphertext).also(webDavCredentialSessionCache::store)
+        }
         return WebDavRuntimeConfig(
             baseUrl = settings.baseUrl,
             remoteRoot = settings.remoteRoot,
             username = settings.username,
-            password = webDavCredentialCipher.decrypt(passwordCiphertext),
+            password = password,
             deviceId = preferencesStore.ensureWebDavDeviceId(),
         )
     }

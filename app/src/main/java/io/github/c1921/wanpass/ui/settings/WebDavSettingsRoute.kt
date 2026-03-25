@@ -43,6 +43,7 @@ import io.github.c1921.wanpass.domain.model.WebDavConfigDraft
 import io.github.c1921.wanpass.domain.model.WebDavSettings
 import io.github.c1921.wanpass.domain.repository.SyncStatusProvider
 import io.github.c1921.wanpass.domain.repository.VaultSettingsRepository
+import io.github.c1921.wanpass.security.securityActionMessage
 import io.github.c1921.wanpass.ui.formatTimestamp
 import io.github.c1921.wanpass.ui.isStrongBiometricAvailable
 import io.github.c1921.wanpass.ui.rememberAuthPromptController
@@ -243,7 +244,7 @@ class WebDavSettingsViewModel @Inject constructor(
                 actionState.update {
                     it.copy(
                         busy = false,
-                        feedbackMessage = error.message ?: "WebDAV 配置失败",
+                        feedbackMessage = error.securityActionMessage("WebDAV 配置失败"),
                         feedbackIsError = true,
                     )
                 }
@@ -302,7 +303,7 @@ class WebDavSettingsViewModel @Inject constructor(
                 actionState.update {
                     it.copy(
                         busy = false,
-                        feedbackMessage = error.message ?: "远端恢复失败",
+                        feedbackMessage = error.securityActionMessage("远端恢复失败"),
                         feedbackIsError = true,
                     )
                 }
@@ -331,11 +332,21 @@ class WebDavSettingsViewModel @Inject constructor(
                 actionState.update {
                     it.copy(
                         busy = false,
-                        feedbackMessage = error.message ?: failureFallback,
+                        feedbackMessage = error.securityActionMessage(failureFallback),
                         feedbackIsError = true,
                     )
                 }
             }
+        }
+    }
+
+    fun showPromptError(message: String) {
+        actionState.update {
+            it.copy(
+                busy = false,
+                feedbackMessage = message,
+                feedbackIsError = true,
+            )
         }
     }
 
@@ -362,11 +373,23 @@ fun WebDavSettingsRoute(
     val context = LocalContext.current
     val biometricAvailable = isStrongBiometricAvailable(context)
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val promptController = rememberAuthPromptController(
+    val recoveryCodePromptController = rememberAuthPromptController(
         title = "再次验证身份",
         subtitle = "查看恢复码前请先确认你本人正在操作",
         onSuccess = onShowRecoveryCode,
-        onFailure = {},
+        onFailure = viewModel::showPromptError,
+    )
+    val enableWebDavPromptController = rememberAuthPromptController(
+        title = "启用 WebDAV 备份",
+        subtitle = "保存服务器凭据前请先验证身份",
+        onSuccess = { viewModel.setWebDavEnabled(true) },
+        onFailure = viewModel::showPromptError,
+    )
+    val restorePromptController = rememberAuthPromptController(
+        title = "恢复 WebDAV 备份",
+        subtitle = "导入远端备份前请先验证身份",
+        onSuccess = viewModel::restoreFromRemote,
+        onFailure = viewModel::showPromptError,
     )
     WebDavSettingsScreen(
         uiState = uiState,
@@ -374,7 +397,13 @@ fun WebDavSettingsRoute(
         onBack = onBack,
         onBiometricEnabledChange = viewModel::setBiometricEnabled,
         onAutoLockDurationChange = viewModel::setAutoLockDuration,
-        onWebDavEnabledChange = viewModel::setWebDavEnabled,
+        onWebDavEnabledChange = { value ->
+            if (value) {
+                enableWebDavPromptController.authenticateDeviceCredential()
+            } else {
+                viewModel.setWebDavEnabled(false)
+            }
+        },
         onWebDavBaseUrlChange = viewModel::updateWebDavBaseUrl,
         onWebDavRemoteRootChange = viewModel::updateWebDavRemoteRoot,
         onWebDavUsernameChange = viewModel::updateWebDavUsername,
@@ -384,8 +413,8 @@ fun WebDavSettingsRoute(
         onSyncNow = viewModel::syncNow,
         onUploadLocalOverwriteRemote = viewModel::uploadLocalOverwriteRemote,
         onTakeOverRemote = viewModel::takeOverRemote,
-        onRestoreFromRemote = viewModel::restoreFromRemote,
-        onShowRecoveryCode = promptController.authenticateDeviceCredential,
+        onRestoreFromRemote = restorePromptController.authenticateDeviceCredential,
+        onShowRecoveryCode = recoveryCodePromptController.authenticateDeviceCredential,
     )
 }
 
@@ -579,7 +608,7 @@ private fun WebDavSettingsScreen(
                         OutlinedButton(
                             onClick = onRestoreFromRemote,
                             modifier = Modifier.fillMaxWidth(),
-                            enabled = !uiState.busy,
+                            enabled = !uiState.busy && uiState.webDavRecoveryCodeInput.isNotBlank(),
                         ) {
                             Text("从远端恢复到本机")
                         }

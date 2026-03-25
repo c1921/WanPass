@@ -1,9 +1,13 @@
 package io.github.c1921.wanpass.session
 
+import android.security.keystore.KeyPermanentlyInvalidatedException
+import android.security.keystore.UserNotAuthenticatedException
 import io.github.c1921.wanpass.core.TimeProvider
 import io.github.c1921.wanpass.domain.model.UnlockResult
 import io.github.c1921.wanpass.domain.repository.VaultSettingsRepository
 import io.github.c1921.wanpass.security.VaultKeyManager
+import io.github.c1921.wanpass.security.WebDavCredentialSessionCache
+import io.github.c1921.wanpass.security.securityActionMessage
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,6 +27,7 @@ class VaultSessionManager @Inject constructor(
     private val searchIndex: SearchIndex,
     private val settingsRepository: VaultSettingsRepository,
     private val timeProvider: TimeProvider,
+    private val webDavCredentialSessionCache: WebDavCredentialSessionCache,
 ) : VaultKeyProvider {
     private val mutableSessionState = MutableStateFlow(VaultSessionState.LOCKED)
     val sessionState: StateFlow<VaultSessionState> = mutableSessionState.asStateFlow()
@@ -36,7 +41,11 @@ class VaultSessionManager @Inject constructor(
         val vaultKey = vaultKeyManager.unwrapVaultKey()
         activate(vaultKey)
         UnlockResult.Success
-    } catch (_: Throwable) {
+    } catch (_: KeyPermanentlyInvalidatedException) {
+        UnlockResult.NeedsRecovery
+    } catch (error: UserNotAuthenticatedException) {
+        UnlockResult.Failure(error.securityActionMessage("请先完成系统身份验证后再继续"))
+    } catch (error: Throwable) {
         UnlockResult.NeedsRecovery
     }
 
@@ -48,8 +57,10 @@ class VaultSessionManager @Inject constructor(
         val vaultKey = vaultKeyManager.recoverAndRebindVault(recoveryCode)
         activate(vaultKey)
         UnlockResult.Success
+    } catch (error: UserNotAuthenticatedException) {
+        UnlockResult.Failure(error.securityActionMessage("请先完成系统身份验证后再继续"))
     } catch (error: Throwable) {
-        UnlockResult.Failure(error.message ?: "恢复码无效")
+        UnlockResult.Failure("恢复码无效")
     }
 
     suspend fun lock() {
@@ -57,6 +68,7 @@ class VaultSessionManager @Inject constructor(
         mutableVaultKeyFlow.value = null
         mutableSessionState.value = VaultSessionState.LOCKED
         lastBackgroundedAt = null
+        webDavCredentialSessionCache.clear()
         searchIndex.clear()
     }
 

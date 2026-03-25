@@ -27,16 +27,18 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.ViewModel
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.c1921.wanpass.data.repository.WebDavSyncGateway
-import io.github.c1921.wanpass.domain.model.WebDavConfigDraft
-import io.github.c1921.wanpass.ui.SecureWindowEffect
-import io.github.c1921.wanpass.ui.isStrongBiometricAvailable
-import androidx.lifecycle.ViewModel
 import io.github.c1921.wanpass.domain.model.PendingSetupVault
+import io.github.c1921.wanpass.domain.model.WebDavConfigDraft
 import io.github.c1921.wanpass.domain.repository.VaultSettingsRepository
 import io.github.c1921.wanpass.security.VaultKeyManager
+import io.github.c1921.wanpass.security.securityActionMessage
 import io.github.c1921.wanpass.session.VaultSessionManager
+import io.github.c1921.wanpass.ui.SecureWindowEffect
+import io.github.c1921.wanpass.ui.isStrongBiometricAvailable
+import io.github.c1921.wanpass.ui.rememberAuthPromptController
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -134,7 +136,7 @@ class OnboardingViewModel @Inject constructor(
             }.onSuccess {
                 mutableUiState.update { it.copy(saving = false, error = "WebDAV 连接测试通过") }
             }.onFailure { error ->
-                mutableUiState.update { it.copy(saving = false, error = error.message ?: "连接测试失败") }
+                mutableUiState.update { it.copy(saving = false, error = error.securityActionMessage("连接测试失败")) }
             }
         }
     }
@@ -159,7 +161,7 @@ class OnboardingViewModel @Inject constructor(
                     )
                 }
             }.onFailure { error ->
-                mutableUiState.update { it.copy(saving = false, error = error.message ?: "远端恢复失败") }
+                mutableUiState.update { it.copy(saving = false, error = error.securityActionMessage("远端恢复失败")) }
             }
         }
     }
@@ -183,9 +185,13 @@ class OnboardingViewModel @Inject constructor(
             }.onSuccess {
                 mutableUiState.value = OnboardingUiState()
             }.onFailure { error ->
-                mutableUiState.update { it.copy(saving = false, error = error.message ?: "初始化失败") }
+                mutableUiState.update { it.copy(saving = false, error = error.securityActionMessage("初始化失败")) }
             }
         }
+    }
+
+    fun showPromptError(message: String) {
+        mutableUiState.update { it.copy(saving = false, error = message) }
     }
 
     private fun currentDraft(): WebDavConfigDraft = WebDavConfigDraft(
@@ -203,8 +209,19 @@ fun OnboardingRoute(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val biometricAvailable = isStrongBiometricAvailable(LocalContext.current)
-    val secureEnabled = uiState.step != OnboardingStep.RecoveryCode
-    SecureWindowEffect(enabled = secureEnabled)
+    val finishPromptController = rememberAuthPromptController(
+        title = "完成初始化",
+        subtitle = "写入本地解锁密钥前请先验证身份",
+        onSuccess = { viewModel.finishSetup(biometricAvailable) },
+        onFailure = viewModel::showPromptError,
+    )
+    val restorePromptController = rememberAuthPromptController(
+        title = "恢复 WebDAV 备份",
+        subtitle = "导入远端备份前请先验证身份",
+        onSuccess = viewModel::restoreFromWebDav,
+        onFailure = viewModel::showPromptError,
+    )
+    SecureWindowEffect(enabled = true)
     when (uiState.step) {
         OnboardingStep.Welcome -> WelcomeStep(
             onStart = viewModel::startSetup,
@@ -223,7 +240,7 @@ fun OnboardingRoute(
             onPasswordChange = viewModel::updateWebDavPassword,
             onRecoveryCodeChange = viewModel::updateRecoveryCodeInput,
             onTestConnection = viewModel::testWebDavConnection,
-            onRestore = viewModel::restoreFromWebDav,
+            onRestore = restorePromptController.authenticateDeviceCredential,
             onBack = viewModel::startSetup,
         )
 
@@ -234,7 +251,15 @@ fun OnboardingRoute(
             error = uiState.error,
             restoreMode = uiState.restoreMode,
             onBiometricChanged = viewModel::setBiometricEnabled,
-            onFinish = { viewModel.finishSetup(biometricAvailable) },
+            onFinish = {
+                if (uiState.restoreMode) {
+                    viewModel.finishSetup(biometricAvailable)
+                } else if (biometricAvailable && uiState.biometricEnabled) {
+                    finishPromptController.authenticateBiometric()
+                } else {
+                    finishPromptController.authenticateDeviceCredential()
+                }
+            },
         )
     }
 }
@@ -257,7 +282,7 @@ private fun WelcomeStep(
             style = MaterialTheme.typography.bodyLarge,
         )
         Text(
-            text = "首次创建后会生成恢复码，请抄下或截图保存。",
+            text = "首次创建后会生成恢复码，请抄写到离线介质并单独保管，不要截图留在相册或云端。",
             modifier = Modifier.padding(top = 8.dp),
             style = MaterialTheme.typography.bodyMedium,
         )
@@ -289,7 +314,7 @@ private fun RecoveryCodeStep(
     ) {
         Text(text = "保存恢复码", style = MaterialTheme.typography.headlineMedium)
         Text(
-            text = "这是恢复当前保险箱的唯一恢复凭证。请立即抄下或截图保存，换机时可配合 WebDAV 备份恢复。",
+            text = "这是恢复当前保险箱的唯一恢复凭证。请立即抄写到离线介质并单独保管，换机时可配合 WebDAV 备份恢复。",
             modifier = Modifier.padding(top = 12.dp),
             style = MaterialTheme.typography.bodyLarge,
         )

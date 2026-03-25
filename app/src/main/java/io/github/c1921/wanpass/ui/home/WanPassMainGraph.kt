@@ -37,7 +37,6 @@ import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
-import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -114,9 +113,7 @@ class HomeViewModel @Inject constructor(
 @Composable
 fun WanPassMainGraph() {
     val navController = rememberNavController()
-    val backStackEntry by navController.currentBackStackEntryAsState()
-    val currentRoute = backStackEntry?.destination?.route
-    SecureWindowEffect(enabled = currentRoute != MainRoutes.RecoveryCode)
+    SecureWindowEffect(enabled = true)
 
     NavHost(
         navController = navController,

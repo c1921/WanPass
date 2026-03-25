@@ -25,7 +25,6 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.c1921.wanpass.security.VaultKeyManager
 import io.github.c1921.wanpass.session.VaultSessionManager
-import io.github.c1921.wanpass.ui.SecureWindowEffect
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -76,7 +75,6 @@ fun RecoveryCodeRoute(
     viewModel: RecoveryCodeViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    SecureWindowEffect(enabled = false)
     RecoveryCodeScreen(
         uiState = uiState,
         onBack = onBack,
