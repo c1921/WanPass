@@ -16,9 +16,44 @@ interface VaultItemDao {
     @Query("SELECT * FROM vault_items WHERE deleted_at IS NULL")
     suspend fun getActiveItemsSnapshot(): List<VaultItemEntity>
 
+    @Query("SELECT * FROM vault_items ORDER BY updated_at DESC")
+    suspend fun getAllItemsSnapshot(): List<VaultItemEntity>
+
     @Query("SELECT * FROM vault_items WHERE id = :itemId LIMIT 1")
     suspend fun getItemById(itemId: String): VaultItemEntity?
 
+    @Query("SELECT COUNT(*) FROM vault_items WHERE deleted_at IS NULL")
+    suspend fun countActiveItems(): Int
+
+    @Query("UPDATE vault_items SET sync_state = :syncState WHERE id = :itemId")
+    suspend fun updateSyncState(itemId: String, syncState: String)
+
+    @Query("UPDATE vault_items SET sync_state = :syncState WHERE id IN (:itemIds)")
+    suspend fun updateSyncStates(itemIds: List<String>, syncState: String)
+
+    @Query("UPDATE vault_items SET sync_state = :syncState WHERE deleted_at IS NULL")
+    suspend fun updateAllActiveSyncStates(syncState: String)
+
+    @Query("DELETE FROM vault_items WHERE id IN (:itemIds)")
+    suspend fun deleteByIds(itemIds: List<String>)
+
+    @Query("DELETE FROM vault_items WHERE deleted_at IS NOT NULL")
+    suspend fun purgeDeletedItems()
+
+    @Query("DELETE FROM vault_items")
+    suspend fun deleteAll()
+
     @Upsert
     suspend fun upsert(entity: VaultItemEntity)
+
+    @Upsert
+    suspend fun upsertAll(entities: List<VaultItemEntity>)
+
+    @androidx.room.Transaction
+    suspend fun replaceAll(entities: List<VaultItemEntity>) {
+        deleteAll()
+        if (entities.isNotEmpty()) {
+            upsertAll(entities)
+        }
+    }
 }

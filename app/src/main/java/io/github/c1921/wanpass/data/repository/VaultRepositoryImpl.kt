@@ -4,6 +4,7 @@ import io.github.c1921.wanpass.core.SearchNormalizer
 import io.github.c1921.wanpass.core.TimeProvider
 import io.github.c1921.wanpass.data.local.VaultItemDao
 import io.github.c1921.wanpass.data.local.VaultItemEntity
+import io.github.c1921.wanpass.data.webdav.WebDavSyncPolicies
 import io.github.c1921.wanpass.domain.model.LoginContent
 import io.github.c1921.wanpass.domain.model.NoteContent
 import io.github.c1921.wanpass.domain.model.SearchEntry
@@ -31,6 +32,7 @@ class VaultRepositoryImpl @Inject constructor(
     private val searchIndex: SearchIndex,
     private val settingsRepository: VaultSettingsRepository,
     private val timeProvider: TimeProvider,
+    private val webDavSyncGateway: WebDavSyncGateway,
 ) : VaultRepository {
     private val json = Json
 
@@ -87,21 +89,26 @@ class VaultRepositoryImpl @Inject constructor(
     override suspend fun delete(itemId: String) {
         val existing = vaultItemDao.getItemById(itemId) ?: return
         val now = timeProvider.now()
+        val webDavEnabled = settingsRepository.loadWebDavSettings().enabled
         vaultItemDao.upsert(
             existing.copy(
                 deletedAt = now,
                 updatedAt = now,
                 revision = existing.revision + 1,
-                syncState = SyncState.DISABLED.storageValue,
+                syncState = WebDavSyncPolicies.deleteState(webDavEnabled).storageValue,
             )
         )
         settingsRepository.removeRecentItem(itemId)
         searchIndex.replace(searchIndex.entries.value.filterNot { it.id == itemId })
+        if (webDavEnabled) {
+            webDavSyncGateway.requestSync()
+        }
     }
 
     private suspend fun upsertLogin(itemId: String, content: LoginContent, existing: VaultItemEntity?) {
         val vaultKey = vaultKeyProvider.requireVaultKey()
         val now = timeProvider.now()
+        val webDavEnabled = settingsRepository.loadWebDavSettings().enabled
         val searchBlob = SearchNormalizer.buildSearchBlob(
             listOf(content.title, content.account, content.site, content.note)
         )
@@ -119,15 +126,22 @@ class VaultRepositoryImpl @Inject constructor(
                 updatedAt = now,
                 deletedAt = null,
                 revision = (existing?.revision ?: 0L) + 1,
-                syncState = SyncState.DISABLED.storageValue,
+                syncState = WebDavSyncPolicies.upsertState(
+                    webDavEnabled = webDavEnabled,
+                    isExistingItem = existing != null,
+                ).storageValue,
             )
         )
         updateSearchIndex(itemId, searchBlob)
+        if (webDavEnabled) {
+            webDavSyncGateway.requestSync()
+        }
     }
 
     private suspend fun upsertNote(itemId: String, content: NoteContent, existing: VaultItemEntity?) {
         val vaultKey = vaultKeyProvider.requireVaultKey()
         val now = timeProvider.now()
+        val webDavEnabled = settingsRepository.loadWebDavSettings().enabled
         val searchBlob = SearchNormalizer.buildSearchBlob(
             listOf(content.title, content.body, content.note)
         )
@@ -145,10 +159,16 @@ class VaultRepositoryImpl @Inject constructor(
                 updatedAt = now,
                 deletedAt = null,
                 revision = (existing?.revision ?: 0L) + 1,
-                syncState = SyncState.DISABLED.storageValue,
+                syncState = WebDavSyncPolicies.upsertState(
+                    webDavEnabled = webDavEnabled,
+                    isExistingItem = existing != null,
+                ).storageValue,
             )
         )
         updateSearchIndex(itemId, searchBlob)
+        if (webDavEnabled) {
+            webDavSyncGateway.requestSync()
+        }
     }
 
     private fun updateSearchIndex(itemId: String, searchBlob: String) {

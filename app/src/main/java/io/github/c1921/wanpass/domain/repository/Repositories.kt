@@ -6,6 +6,9 @@ import io.github.c1921.wanpass.domain.model.NoteContent
 import io.github.c1921.wanpass.domain.model.SyncState
 import io.github.c1921.wanpass.domain.model.VaultItem
 import io.github.c1921.wanpass.domain.model.VaultItemSummary
+import io.github.c1921.wanpass.domain.model.WebDavConfigDraft
+import io.github.c1921.wanpass.domain.model.WebDavRuntimeConfig
+import io.github.c1921.wanpass.domain.model.WebDavSettings
 import io.github.c1921.wanpass.domain.model.VaultKeyMetadata
 import io.github.c1921.wanpass.domain.model.VaultSettings
 import kotlinx.coroutines.flow.Flow
@@ -23,6 +26,7 @@ interface VaultRepository {
 interface VaultSettingsRepository {
     val settingsFlow: Flow<VaultSettings>
     val recentViewedIdsFlow: Flow<List<String>>
+    val webDavSettingsFlow: Flow<WebDavSettings>
     suspend fun setOnboardingComplete(value: Boolean)
     suspend fun setBiometricEnabled(value: Boolean)
     suspend fun setAutoLockDuration(value: AutoLockDuration)
@@ -30,6 +34,13 @@ interface VaultSettingsRepository {
     suspend fun removeRecentItem(itemId: String)
     suspend fun loadKeyMetadata(): VaultKeyMetadata?
     suspend fun saveKeyMetadata(metadata: VaultKeyMetadata)
+    suspend fun loadWebDavSettings(): WebDavSettings
+    suspend fun saveWebDavConfig(draft: WebDavConfigDraft)
+    suspend fun setWebDavEnabled(value: Boolean)
+    suspend fun clearWebDavConfig()
+    suspend fun loadWebDavRuntimeConfig(): WebDavRuntimeConfig?
+    suspend fun setWebDavSyncStatus(lastSyncAt: Long?, lastSyncError: String?)
+    suspend fun ensureWebDavDeviceId(): String
 }
 
 interface SyncStatusProvider {

@@ -5,11 +5,14 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import io.github.c1921.wanpass.domain.model.AutoLockDuration
 import io.github.c1921.wanpass.domain.model.VaultKeyMetadata
 import io.github.c1921.wanpass.domain.model.VaultSettings
+import io.github.c1921.wanpass.domain.model.WebDavSettings
 import java.io.IOException
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
@@ -54,6 +57,27 @@ class VaultPreferencesStore @Inject constructor(
         }
         .map { preferences ->
             preferences[Keys.RecentViewedIds]?.let { json.decodeFromString<List<String>>(it) } ?: emptyList()
+        }
+
+    val webDavSettingsFlow: Flow<WebDavSettings> = dataStore.data
+        .catch { exception ->
+            if (exception is IOException) {
+                emit(emptyPreferences())
+            } else {
+                throw exception
+            }
+        }
+        .map { preferences ->
+            WebDavSettings(
+                enabled = preferences[Keys.WebDavEnabled] ?: false,
+                baseUrl = preferences[Keys.WebDavBaseUrl] ?: "",
+                remoteRoot = preferences[Keys.WebDavRemoteRoot] ?: "WanPass",
+                username = preferences[Keys.WebDavUsername] ?: "",
+                hasPassword = preferences[Keys.WebDavPasswordCiphertext] != null,
+                deviceId = preferences[Keys.WebDavDeviceId] ?: "",
+                lastSyncAt = preferences[Keys.WebDavLastSyncAt],
+                lastSyncError = preferences[Keys.WebDavLastSyncError],
+            )
         }
 
     suspend fun setOnboardingComplete(value: Boolean) {
@@ -112,6 +136,68 @@ class VaultPreferencesStore @Inject constructor(
         }
     }
 
+    suspend fun loadWebDavSettings(): WebDavSettings = webDavSettingsFlow.first()
+
+    suspend fun loadWebDavPasswordCiphertext(): String? = dataStore.data.first()[Keys.WebDavPasswordCiphertext]
+
+    suspend fun saveWebDavConfig(
+        baseUrl: String,
+        remoteRoot: String,
+        username: String,
+        passwordCiphertext: String?,
+        preserveStoredPassword: Boolean,
+    ) {
+        dataStore.edit { preferences ->
+            preferences[Keys.WebDavBaseUrl] = baseUrl
+            preferences[Keys.WebDavRemoteRoot] = remoteRoot
+            preferences[Keys.WebDavUsername] = username
+            if (passwordCiphertext != null) {
+                preferences[Keys.WebDavPasswordCiphertext] = passwordCiphertext
+            } else if (!preserveStoredPassword) {
+                preferences.remove(Keys.WebDavPasswordCiphertext)
+            }
+        }
+    }
+
+    suspend fun setWebDavEnabled(value: Boolean) {
+        dataStore.edit { preferences -> preferences[Keys.WebDavEnabled] = value }
+    }
+
+    suspend fun clearWebDavConfig() {
+        dataStore.edit { preferences ->
+            preferences.remove(Keys.WebDavEnabled)
+            preferences.remove(Keys.WebDavBaseUrl)
+            preferences.remove(Keys.WebDavRemoteRoot)
+            preferences.remove(Keys.WebDavUsername)
+            preferences.remove(Keys.WebDavPasswordCiphertext)
+            preferences.remove(Keys.WebDavLastSyncAt)
+            preferences.remove(Keys.WebDavLastSyncError)
+        }
+    }
+
+    suspend fun setWebDavSyncStatus(lastSyncAt: Long?, lastSyncError: String?) {
+        dataStore.edit { preferences ->
+            if (lastSyncAt == null) {
+                preferences.remove(Keys.WebDavLastSyncAt)
+            } else {
+                preferences[Keys.WebDavLastSyncAt] = lastSyncAt
+            }
+            if (lastSyncError.isNullOrBlank()) {
+                preferences.remove(Keys.WebDavLastSyncError)
+            } else {
+                preferences[Keys.WebDavLastSyncError] = lastSyncError
+            }
+        }
+    }
+
+    suspend fun ensureWebDavDeviceId(): String {
+        val existing = dataStore.data.first()[Keys.WebDavDeviceId]
+        if (!existing.isNullOrBlank()) return existing
+        val deviceId = UUID.randomUUID().toString()
+        dataStore.edit { preferences -> preferences[Keys.WebDavDeviceId] = deviceId }
+        return deviceId
+    }
+
     private object Keys {
         val OnboardingComplete = booleanPreferencesKey("onboarding_complete")
         val BiometricEnabled = booleanPreferencesKey("biometric_enabled")
@@ -121,5 +207,13 @@ class VaultPreferencesStore @Inject constructor(
         val RecoveryWrappedVaultKey = stringPreferencesKey("recovery_wrapped_vault_key")
         val RecoverySalt = stringPreferencesKey("recovery_salt")
         val RecoveryCodeCiphertext = stringPreferencesKey("recovery_code_ciphertext")
+        val WebDavEnabled = booleanPreferencesKey("webdav_enabled")
+        val WebDavBaseUrl = stringPreferencesKey("webdav_base_url")
+        val WebDavRemoteRoot = stringPreferencesKey("webdav_remote_root")
+        val WebDavUsername = stringPreferencesKey("webdav_username")
+        val WebDavPasswordCiphertext = stringPreferencesKey("webdav_password_ciphertext")
+        val WebDavDeviceId = stringPreferencesKey("webdav_device_id")
+        val WebDavLastSyncAt = longPreferencesKey("webdav_last_sync_at")
+        val WebDavLastSyncError = stringPreferencesKey("webdav_last_sync_error")
     }
 }

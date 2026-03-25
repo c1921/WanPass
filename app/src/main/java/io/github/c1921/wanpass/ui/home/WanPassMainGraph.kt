@@ -43,6 +43,7 @@ import androidx.navigation.navArgument
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.c1921.wanpass.domain.model.VaultItemSummary
 import io.github.c1921.wanpass.domain.model.VaultItemType
+import io.github.c1921.wanpass.data.repository.WebDavSyncGateway
 import io.github.c1921.wanpass.domain.repository.SyncStatusProvider
 import io.github.c1921.wanpass.domain.repository.VaultRepository
 import io.github.c1921.wanpass.domain.repository.VaultSettingsRepository
@@ -76,8 +77,13 @@ class HomeViewModel @Inject constructor(
     vaultSettingsRepository: VaultSettingsRepository,
     searchIndex: SearchIndex,
     syncStatusProvider: SyncStatusProvider,
+    webDavSyncGateway: WebDavSyncGateway,
 ) : ViewModel() {
     private val queryFlow = MutableStateFlow("")
+
+    init {
+        webDavSyncGateway.requestSync()
+    }
 
     val uiState: StateFlow<HomeUiState> = combine(
         vaultRepository.observeSummaries(),

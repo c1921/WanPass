@@ -14,7 +14,7 @@ import dagger.hilt.components.SingletonComponent
 import io.github.c1921.wanpass.core.SystemTimeProvider
 import io.github.c1921.wanpass.core.TimeProvider
 import io.github.c1921.wanpass.data.local.VaultDatabase
-import io.github.c1921.wanpass.data.repository.NoopWebDavSyncGateway
+import io.github.c1921.wanpass.data.repository.WebDavSyncGateway
 import io.github.c1921.wanpass.data.repository.VaultRepositoryImpl
 import io.github.c1921.wanpass.data.repository.VaultSettingsRepositoryImpl
 import io.github.c1921.wanpass.domain.repository.SyncStatusProvider
@@ -39,7 +39,7 @@ abstract class AppBindingsModule {
 
     @Binds
     @Singleton
-    abstract fun bindSyncStatusProvider(impl: NoopWebDavSyncGateway): SyncStatusProvider
+    abstract fun bindSyncStatusProvider(impl: WebDavSyncGateway): SyncStatusProvider
 
     @Binds
     @Singleton
